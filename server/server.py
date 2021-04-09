@@ -1,43 +1,44 @@
 
 from io import BytesIO
 import json
-import uuid
 
 from flask import Flask, session, url_for, redirect, request, Response, jsonify
 
-import db
-from budget.excelstatement import ExcelStatement
+from budget.statement import Statement
 
 app = Flask(__name__)
 
-def _statement_data():
-    return db.cn['statement_data']
+@app.route('/statement', methods=["GET"])
+def get_statements():
+    return jsonify(Statement.get_statements())
 
 @app.route('/statement', methods=["POST"])
 def create_statement():
     date = request.args.get('date')
-    doc = _statement_data().find({"Date": date})
+    doc = Statement.get_statement({"Date": date})
     file = request.get_data()
 
     if doc:
-        return "Statement already exists for the date {}".format(date), 400
+        return "statement already exists with the date {}".format(date), 400
 
-    statement = ExcelStatement(BytesIO(file))
-    
-    doc = {
-        "_id": 'statement:%s' % uuid.uuid4(),
-        "Date": date,
-        "Budget": [],
-        "Transactions": statement.transactions
-    }
+    statement = Statement.from_file(file, date)
+    statement.save()
 
-    for transaction in doc["Transactions"]:
-        transaction["_id"] = 'transaction:{}'.format(uuid.uuid4())
-        transaction["Category"] = None
+    return jsonify(statement.doc)
 
-    _statement_data().insert_one(doc)
-    return json.dumps(doc, indent=4)
-
-@app.route('/statement/<statement_id>', methods=["POST"])
+@app.route('/statement/<statement_id>', methods=["PATCH"])
 def update_statement(statement_id):
-    return 'updating statement'
+    trusted_doc = Statement.get_statement({"_id": "statement:{}".format(statement_id)})
+    doc = request.json
+
+    if not trusted_doc:
+        return "statement {} does not exist".format(statement_id), 404
+    elif not doc:
+        return "no payload provided", 400
+    elif doc['_id'] != trusted_doc['_id']:
+        return "statement_id mismatch", 400
+
+    statement = Statement(trusted_doc)
+    statement.update_statement(doc)
+
+    return jsonify(statement.doc)
